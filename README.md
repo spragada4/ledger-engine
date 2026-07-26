@@ -2,7 +2,7 @@
 
 An idempotent, double-entry payments ledger service built with FastAPI, SQLAlchemy, and PostgreSQL — designed to demonstrate correct handling of the hard problems in real payment systems: safe request retries, concurrency-safe balance updates, and an auditable transaction history.
 
-**Status:** In progress (Phase 4 of 7 complete)
+**Status:** In progress (Phase 5 of 7 complete)
 
 ---
 
@@ -18,6 +18,7 @@ Most CRUD apps don't have to think about money moving twice, two requests racing
 - **`Numeric(18,2)` for all monetary amounts**, never `Float` — avoids binary floating-point rounding errors accumulating across transactions.
 - **Idempotency keys, not just idempotent design.** Clients supply an `Idempotency-Key` header on every transfer. Duplicate requests (e.g. from a client retry after a timeout) return the original result instead of double-processing.
 - **Row-level locking with deadlock-safe ordering.** Concurrent transfers on the same account are serialized using `SELECT ... FOR UPDATE`, with accounts always locked in a consistent (UUID-sorted) order regardless of transfer direction — preventing classic circular-wait deadlocks.
+- **Reconciliation as a first-class concern, not an afterthought.** System-wide totals balancing is *not* sufficient proof the ledger is correct — see below.
 
 ---
 
@@ -44,6 +45,16 @@ Most CRUD apps don't have to think about money moving twice, two requests racing
   - **Before locking fix:** 15/20 succeeded (should have been 10), draining the account past zero — a real, reproduced race condition
   - **After fix:** exactly 10/20 succeed, final balance lands at exactly `0.00`
 
+### Reconciliation (`reconcile.py`)
+A standalone script verifying the ledger is internally consistent:
+- **System-wide check** — total credits must equal total debits across the entire ledger
+- **Per-account breakdown** — prints every account's derived balance
+- **Per-transfer integrity check** — verifies each transfer's linked ledger entries still sum to its recorded amount
+
+The per-transfer check exists because of a real gap found while building it: a manual data edit shifted `5.00` from one account's credit entry to another's. System-wide totals still balanced (credits still equaled debits overall), so that check alone passed — but the per-transfer check caught the exact transfer and discrepancy. This is documented here deliberately: **global totals balancing is not sufficient proof of ledger correctness**, since amounts can be misattributed between accounts without changing the system-wide sum.
+
+Exit codes: `0` if fully balanced, `1` if any check fails (suitable for wiring into CI or a monitoring job).
+
 ---
 
 ## Tech stack
@@ -68,11 +79,13 @@ uvicorn app.main:app --reload
 
 # run tests
 pytest tests/ -v
+
+# run the reconciliation check
+python reconcile.py
 ```
 
 ---
 
 ## Coming next
-- **Reconciliation script** — standalone check verifying system-wide debits equal credits, plus per-account balance audit
 - **Dockerize the app + GitHub Actions CI** — tests running automatically on every push
 - **Deployment** — hosted instance + architecture diagram
