@@ -69,12 +69,17 @@ def create_transfer(
                 detail="Transfer with this idempotency key is already in progress",
             )
 
-    from_account = db.query(models.Account).filter(
-        models.Account.id == payload.from_account_id
-    ).first()
-    to_account = db.query(models.Account).filter(
-        models.Account.id == payload.to_account_id
-    ).first()
+    # Lock both accounts in a consistent order (by ID) to prevent deadlocks
+    account_ids_sorted = sorted([payload.from_account_id, payload.to_account_id])
+    locked_accounts = {}
+    for acc_id in account_ids_sorted:
+        acc = db.query(models.Account).filter(
+            models.Account.id == acc_id
+        ).with_for_update().first()
+        locked_accounts[acc_id] = acc
+
+    from_account = locked_accounts.get(payload.from_account_id)
+    to_account = locked_accounts.get(payload.to_account_id)
 
     if not from_account or not to_account:
         raise HTTPException(status_code=404, detail="One or both accounts not found")
