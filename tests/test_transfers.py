@@ -18,13 +18,15 @@ def test_transfer_updates_balances_correctly():
     account_a_id = resp_a.json()["id"]
     account_b_id = resp_b.json()["id"]
 
+    client.post(f"/accounts/{account_a_id}/deposit", params={"amount": "1000.00"})
+
     # Step 2: confirm both start at 0.00
     balance_a = client.get(f"/accounts/{account_a_id}/balance")
     balance_b = client.get(f"/accounts/{account_b_id}/balance")
 
     assert balance_a.status_code == 200
     assert balance_b.status_code == 200
-    assert Decimal(balance_a.json()["balance"]) == Decimal("0.00")
+    assert Decimal(balance_a.json()["balance"]) == Decimal("1000.00")
     assert Decimal(balance_b.json()["balance"]) == Decimal("0.00")
 
     # Step 3: transfer from A to B
@@ -46,7 +48,7 @@ def test_transfer_updates_balances_correctly():
     balance_a_after = client.get(f"/accounts/{account_a_id}/balance")
     balance_b_after = client.get(f"/accounts/{account_b_id}/balance")
 
-    assert Decimal(balance_a_after.json()["balance"]) == -transfer_amount
+    assert Decimal(balance_a_after.json()["balance"]) == Decimal("1000.00") - transfer_amount
     assert Decimal(balance_b_after.json()["balance"]) == transfer_amount
 
 def test_duplicate_transfer_with_same_idempotency_key_is_not_double_processed():
@@ -56,6 +58,8 @@ def test_duplicate_transfer_with_same_idempotency_key_is_not_double_processed():
 
     account_a_id = resp_a.json()["id"]
     account_b_id = resp_b.json()["id"]
+
+    client.post(f"/accounts/{account_a_id}/deposit", params={"amount": "1000.00"})
 
     idempotency_key = str(uuid.uuid4())
     transfer_amount = Decimal("30.00")

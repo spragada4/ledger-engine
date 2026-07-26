@@ -39,7 +39,7 @@ class LedgerEntry(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False)
-    transfer_id = Column(UUID(as_uuid=True), ForeignKey("transfers.id"), nullable=False)
+    transfer_id = Column(UUID(as_uuid=True), ForeignKey("transfers.id"), nullable=True)
     direction = Column(String, nullable=False)  # "debit" | "credit"
     amount = Column(Numeric(18, 2), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

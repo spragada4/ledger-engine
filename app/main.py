@@ -26,13 +26,7 @@ def create_account(payload: schemas.AccountCreate, db: Session = Depends(get_db)
     db.refresh(account)
     return account
 
-
-@app.get("/accounts/{account_id}/balance", response_model=schemas.BalanceOut)
-def get_balance(account_id: uuid.UUID, db: Session = Depends(get_db)):
-    account = db.query(models.Account).filter(models.Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-
+def get_account_balance(db: Session, account_id: uuid.UUID) -> Decimal:
     entries = db.query(models.LedgerEntry).filter(
         models.LedgerEntry.account_id == account_id
     ).all()
@@ -43,7 +37,16 @@ def get_balance(account_id: uuid.UUID, db: Session = Depends(get_db)):
             balance += entry.amount
         elif entry.direction == "debit":
             balance -= entry.amount
+    return balance
 
+
+@app.get("/accounts/{account_id}/balance", response_model=schemas.BalanceOut)
+def get_balance(account_id: uuid.UUID, db: Session = Depends(get_db)):
+    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    balance = get_account_balance(db, account_id)
     return schemas.BalanceOut(account_id=account_id, balance=balance)
 
 
@@ -53,22 +56,18 @@ def create_transfer(
     idempotency_key: str = Header(...),
     db: Session = Depends(get_db),
 ):
-    # Check if we've seen this idempotency key before
     existing = db.query(models.Transfer).filter(
         models.Transfer.idempotency_key == idempotency_key
     ).first()
 
     if existing:
         if existing.status == "completed":
-            # Safe to return the same result again — no new work done
             return existing
         elif existing.status == "pending":
-            # A duplicate arrived while the original is still being processed
             raise HTTPException(
                 status_code=409,
                 detail="Transfer with this idempotency key is already in progress",
             )
-        # if status == "failed", we could allow retry — not handling that case yet
 
     from_account = db.query(models.Account).filter(
         models.Account.id == payload.from_account_id
@@ -82,6 +81,12 @@ def create_transfer(
 
     if payload.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    # --- NEW: sufficient funds check ---
+    balance = get_account_balance(db, payload.from_account_id)
+    if balance < payload.amount:
+        raise HTTPException(status_code=400, detail="Insufficient funds")
+    # --- end new code ---
 
     transfer = models.Transfer(
         idempotency_key=idempotency_key,
@@ -111,3 +116,23 @@ def create_transfer(
     db.commit()
     db.refresh(transfer)
     return transfer
+
+@app.post("/accounts/{account_id}/deposit", response_model=schemas.BalanceOut)
+def deposit(account_id: uuid.UUID, amount: Decimal, db: Session = Depends(get_db)):
+    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    entry = models.LedgerEntry(
+        account_id=account_id,
+        transfer_id=None,
+        direction="credit",
+        amount=amount,
+    )
+    db.add(entry)
+    db.commit()
+
+    balance = get_account_balance(db, account_id)
+    return schemas.BalanceOut(account_id=account_id, balance=balance)   
