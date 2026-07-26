@@ -11,8 +11,7 @@ class AccountOut(BaseModel):
     id: uuid.UUID
     name: str
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class BalanceOut(BaseModel):
@@ -33,5 +32,4 @@ class TransferOut(BaseModel):
     amount: Decimal
     status: str
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
