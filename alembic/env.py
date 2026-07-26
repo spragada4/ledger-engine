@@ -16,6 +16,11 @@ from app import models  # noqa: F401 — needed so models register with Base.met
 # access to the values within the .ini file in use.
 config = context.config
 
+# Allow overriding the DB URL via environment variable (used for test DB)
+db_url = os.environ.get("DATABASE_URL")
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
+
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
@@ -52,6 +57,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
+    
 
     with context.begin_transaction():
         context.run_migrations()
