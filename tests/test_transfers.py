@@ -1,5 +1,6 @@
 from decimal import Decimal
 from fastapi.testclient import TestClient
+import uuid
 
 from app.main import app
 
@@ -28,11 +29,15 @@ def test_transfer_updates_balances_correctly():
 
     # Step 3: transfer from A to B
     transfer_amount = Decimal("50.00")
-    transfer_resp = client.post("/transfers", json={
-        "from_account_id": account_a_id,
-        "to_account_id": account_b_id,
-        "amount": str(transfer_amount),
-    })
+    transfer_resp = client.post(
+        "/transfers",
+        json={
+            "from_account_id": account_a_id,
+            "to_account_id": account_b_id,
+            "amount": str(transfer_amount),
+        },
+        headers={"idempotency-key": str(uuid.uuid4())},
+    )
 
     assert transfer_resp.status_code == 200
     assert transfer_resp.json()["status"] == "completed"
@@ -43,3 +48,35 @@ def test_transfer_updates_balances_correctly():
 
     assert Decimal(balance_a_after.json()["balance"]) == -transfer_amount
     assert Decimal(balance_b_after.json()["balance"]) == transfer_amount
+
+def test_duplicate_transfer_with_same_idempotency_key_is_not_double_processed():
+    # Create two accounts
+    resp_a = client.post("/accounts", json={"name": "Charlie"})
+    resp_b = client.post("/accounts", json={"name": "Dana"})
+
+    account_a_id = resp_a.json()["id"]
+    account_b_id = resp_b.json()["id"]
+
+    idempotency_key = str(uuid.uuid4())
+    transfer_amount = Decimal("30.00")
+
+    payload = {
+        "from_account_id": account_a_id,
+        "to_account_id": account_b_id,
+        "amount": str(transfer_amount),
+    }
+    headers = {"idempotency-key": idempotency_key}
+
+    # Fire the same request twice
+    first_resp = client.post("/transfers", json=payload, headers=headers)
+    second_resp = client.post("/transfers", json=payload, headers=headers)
+
+    assert first_resp.status_code == 200
+    assert second_resp.status_code == 200
+
+    # Both responses should refer to the SAME transfer
+    assert first_resp.json()["id"] == second_resp.json()["id"]
+
+    # Balance should reflect ONE transfer, not two
+    balance_b = client.get(f"/accounts/{account_b_id}/balance")
+    assert Decimal(balance_b.json()["balance"]) == transfer_amount    

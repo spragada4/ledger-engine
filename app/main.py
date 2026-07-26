@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -48,7 +48,28 @@ def get_balance(account_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @app.post("/transfers", response_model=schemas.TransferOut)
-def create_transfer(payload: schemas.TransferCreate, db: Session = Depends(get_db)):
+def create_transfer(
+    payload: schemas.TransferCreate,
+    idempotency_key: str = Header(...),
+    db: Session = Depends(get_db),
+):
+    # Check if we've seen this idempotency key before
+    existing = db.query(models.Transfer).filter(
+        models.Transfer.idempotency_key == idempotency_key
+    ).first()
+
+    if existing:
+        if existing.status == "completed":
+            # Safe to return the same result again — no new work done
+            return existing
+        elif existing.status == "pending":
+            # A duplicate arrived while the original is still being processed
+            raise HTTPException(
+                status_code=409,
+                detail="Transfer with this idempotency key is already in progress",
+            )
+        # if status == "failed", we could allow retry — not handling that case yet
+
     from_account = db.query(models.Account).filter(
         models.Account.id == payload.from_account_id
     ).first()
@@ -63,14 +84,14 @@ def create_transfer(payload: schemas.TransferCreate, db: Session = Depends(get_d
         raise HTTPException(status_code=400, detail="Amount must be positive")
 
     transfer = models.Transfer(
-        idempotency_key=str(uuid.uuid4()),  # placeholder — Phase 3 makes this a real client-supplied key
+        idempotency_key=idempotency_key,
         from_account_id=payload.from_account_id,
         to_account_id=payload.to_account_id,
         amount=payload.amount,
         status="pending",
     )
     db.add(transfer)
-    db.flush()  # get transfer.id without committing yet
+    db.flush()
 
     debit_entry = models.LedgerEntry(
         account_id=payload.from_account_id,
