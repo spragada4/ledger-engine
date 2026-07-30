@@ -21,22 +21,31 @@ Most CRUD apps don't have to think about money moving twice, two requests racing
 - **Reconciliation as a first-class concern, not an afterthought.** System-wide totals balancing is *not* sufficient proof the ledger is correct — see below.
 
 ---
-
 ## Architecture
-┌─────────────┐ ┌──────────────────┐ ┌─────────────────┐
-│ Client │─────▶│ FastAPI app │─────▶│ PostgreSQL │
-│ (curl/docs) │ │ (app container) │ │ (db container) │
-└─────────────┘ └──────────────────┘ └─────────────────┘
-│
-▼
-┌──────────────────┐
-│ reconcile.py │
-│ (standalone │
-│ integrity check)│
-└──────────────────┘
 
-Separate, isolated Postgres instance (test_db, port 5433) used
-exclusively by the pytest suite — never shares state with dev data.
+```mermaid
+flowchart LR
+    Client["Client<br/>(curl / Swagger UI)"]
+    App["FastAPI App<br/>(app container)"]
+    DB[("PostgreSQL<br/>dev db")]
+    TestDB[("PostgreSQL<br/>test db · isolated")]
+    Reconcile["reconcile.py<br/>(standalone integrity check)"]
+    CI["GitHub Actions CI<br/>(pytest + migrations)"]
+
+    Client -->|HTTP requests| App
+    App -->|reads/writes| DB
+    Reconcile -->|verifies| DB
+    CI -->|runs tests against| TestDB
+
+    style Client fill:#e8f0fe,stroke:#4285f4
+    style App fill:#e6f4ea,stroke:#34a853
+    style DB fill:#fef7e0,stroke:#fbbc04
+    style TestDB fill:#fef7e0,stroke:#fbbc04
+    style Reconcile fill:#fce8e6,stroke:#ea4335
+    style CI fill:#f3e8fd,stroke:#a142f4
+```
+
+**Key point:** the test database (`test_db`, port `5433`) is a completely separate Postgres instance from the dev database (`db`, port `5432`). No test run ever touches dev data, and vice versa — this isolation is what made the concurrency and idempotency tests trustworthy.
 
 ---
 
