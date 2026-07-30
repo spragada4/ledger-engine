@@ -1,8 +1,8 @@
 # Ledger Engine
 
-An idempotent, double-entry payments ledger service built with FastAPI, SQLAlchemy, and PostgreSQL — designed to demonstrate correct handling of the hard problems in real payment systems: safe request retries, concurrency-safe balance updates, and an auditable transaction history.
+An idempotent, double-entry payments ledger service built with FastAPI, SQLAlchemy, and PostgreSQL — built to demonstrate correct handling of the hard problems in real payment systems: safe request retries, concurrency-safe balance updates, and an auditable transaction history.
 
-**Status:** In progress (Phase 5 of 7 complete)
+**Status:** Feature-complete for local/demo use (Docker Compose). Not currently deployed.
 
 ---
 
@@ -22,51 +22,67 @@ Most CRUD apps don't have to think about money moving twice, two requests racing
 
 ---
 
-## What's built so far
+## Architecture
+┌─────────────┐ ┌──────────────────┐ ┌─────────────────┐
+│ Client │─────▶│ FastAPI app │─────▶│ PostgreSQL │
+│ (curl/docs) │ │ (app container) │ │ (db container) │
+└─────────────┘ └──────────────────┘ └─────────────────┘
+│
+▼
+┌──────────────────┐
+│ reconcile.py │
+│ (standalone │
+│ integrity check)│
+└──────────────────┘
+
+Separate, isolated Postgres instance (test_db, port 5433) used
+exclusively by the pytest suite — never shares state with dev data.
+
+---
+
+## What's built
 
 ### Data model
-- `accounts`, `transfers`, `ledger_entries` — see `app/models.py`
-- Alembic migrations tracked from day one, including a fix where a Python-side default (`default=0`) was caught *not* enforcing at the database level, and corrected with `server_default`
+`accounts`, `transfers`, `ledger_entries` — see `app/models.py`. Alembic migrations tracked from day one, including a fix where a Python-side default (`default=0`) was caught *not* enforcing at the database level, and corrected with `server_default`.
 
 ### API (`app/main.py`)
 - `POST /accounts` — create an account
 - `GET /accounts/{id}/balance` — computed balance from ledger history
 - `POST /accounts/{id}/deposit` — fund an account (dev/testing convenience)
-- `POST /transfers` — double-entry transfer between accounts, with:
-  - Idempotency key handling (duplicate-safe)
-  - Sufficient-funds check (rejects overdraft)
-  - Row-level locking to prevent race conditions under concurrent load
+- `POST /transfers` — double-entry transfer between accounts, with idempotency handling, sufficient-funds checks, and row-level locking
 
 ### Tests (`tests/`)
-- Isolated test database (separate Postgres container, port `5433`) with automatic table truncation before/after every test — no shared state between runs
+Isolated test database with automatic table truncation between every test.
 - `test_transfer_updates_balances_correctly` — basic transfer correctness
 - `test_duplicate_transfer_with_same_idempotency_key_is_not_double_processed` — proves retried requests don't double-charge
-- `test_concurrent_transfers_do_not_overdraft_account` — fires 20 concurrent transfer requests against a single funded account:
-  - **Before locking fix:** 15/20 succeeded (should have been 10), draining the account past zero — a real, reproduced race condition
-  - **After fix:** exactly 10/20 succeed, final balance lands at exactly `0.00`
+- `test_concurrent_transfers_do_not_overdraft_account` — fires 20 concurrent transfers against one account:
+  - **Before the locking fix:** 15/20 succeeded (should have been 10) — a real, reproduced race condition
+  - **After the fix:** exactly 10/20 succeed, balance lands at exactly `0.00`
 
 ### Reconciliation (`reconcile.py`)
-A standalone script verifying the ledger is internally consistent:
-- **System-wide check** — total credits must equal total debits across the entire ledger
-- **Per-account breakdown** — prints every account's derived balance
-- **Per-transfer integrity check** — verifies each transfer's linked ledger entries still sum to its recorded amount
+- System-wide check: total credits must equal total debits
+- Per-account balance breakdown
+- Per-transfer integrity check — added after a manual data edit shifted `5.00` between two accounts' credit entries while leaving system-wide totals balanced. This is documented deliberately: **global totals balancing alone does not prove ledger correctness**, since amounts can be misattributed between accounts without changing the system-wide sum.
+- Exit code `0` if fully balanced, `1` otherwise (CI/monitoring-friendly)
 
-The per-transfer check exists because of a real gap found while building it: a manual data edit shifted `5.00` from one account's credit entry to another's. System-wide totals still balanced (credits still equaled debits overall), so that check alone passed — but the per-transfer check caught the exact transfer and discrepancy. This is documented here deliberately: **global totals balancing is not sufficient proof of ledger correctness**, since amounts can be misattributed between accounts without changing the system-wide sum.
+### CI/CD
+GitHub Actions runs the full test suite (including the concurrency test) on every push — spins up an ephemeral Postgres service, applies migrations, runs pytest.
 
-Exit codes: `0` if fully balanced, `1` if any check fails (suitable for wiring into CI or a monitoring job).
+### Containerization
+Full stack (`app`, `db`, `test_db`) runs via a single `docker compose up -d --build`.
 
 ---
 
 ## Tech stack
-Python · FastAPI · SQLAlchemy · Alembic · PostgreSQL · pytest · Docker
+Python · FastAPI · SQLAlchemy · Alembic · PostgreSQL · pytest · Docker · GitHub Actions
 
 ---
 
 ## Running it locally
 
 ```bash
-# start dev + test databases
-docker compose up -d
+# start the full stack (app + dev db + test db)
+docker compose up -d --build
 
 # apply migrations (dev db)
 alembic upgrade head
@@ -74,8 +90,8 @@ alembic upgrade head
 # apply migrations (test db)
 DATABASE_URL="postgresql://ledger_user:ledger_pass@localhost:5433/ledger_test_db" alembic upgrade head
 
-# run the API
-uvicorn app.main:app --reload
+# API docs
+open http://localhost:8000/docs
 
 # run tests
 pytest tests/ -v
@@ -86,6 +102,8 @@ python reconcile.py
 
 ---
 
-## Coming next
-- **Dockerize the app + GitHub Actions CI** — tests running automatically on every push
-- **Deployment** — hosted instance + architecture diagram
+## Known limitations / future work
+- Not currently deployed to a public host — runs via Docker Compose locally or in CI
+- No authentication/authorization on the API (out of scope for this project's focus on transaction correctness)
+- Reconciliation is run manually/on-demand, not scheduled
+- No support for partial/multi-currency transfers
